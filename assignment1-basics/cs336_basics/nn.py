@@ -65,6 +65,12 @@ def silu(x: torch.Tensor) -> torch.Tensor:
     return x * torch.sigmoid(x)
 
 
+def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
+    shifted = x - torch.max(x, dim=dim, keepdim=True).values
+    exp = torch.exp(shifted)
+    return exp / torch.sum(exp, dim=dim, keepdim=True)
+
+
 class SwiGLU(nn.Module):
     def __init__(
         self,
@@ -80,3 +86,36 @@ class SwiGLU(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.w2(silu(self.w1(x)) * self.w3(x))
+
+
+class RotaryPositionalEmbedding(nn.Module):
+    def __init__(
+        self,
+        theta: float,
+        d_k: int,
+        max_seq_len: int,
+        device: torch.device | None = None,
+    ) -> None:
+        super().__init__()
+        if d_k % 2 != 0:
+            raise ValueError("RoPE requires an even d_k")
+
+        positions = torch.arange(max_seq_len, device=device, dtype=torch.float32)
+        dimension_pairs = torch.arange(0, d_k, 2, device=device, dtype=torch.float32)
+        inverse_frequencies = theta ** (-dimension_pairs / d_k)
+        angles = positions[:, None] * inverse_frequencies[None, :]
+        self.register_buffer("cos", torch.cos(angles), persistent=False)
+        self.register_buffer("sin", torch.sin(angles), persistent=False)
+
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+        in_dtype = x.dtype
+        x_float = x.to(torch.float32)
+        cos = self.cos[token_positions]
+        sin = self.sin[token_positions]
+
+        x_even = x_float[..., 0::2]
+        x_odd = x_float[..., 1::2]
+        rotated = torch.empty_like(x_float)
+        rotated[..., 0::2] = x_even * cos - x_odd * sin
+        rotated[..., 1::2] = x_even * sin + x_odd * cos
+        return rotated.to(in_dtype)
