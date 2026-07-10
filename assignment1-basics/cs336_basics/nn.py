@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import nn
 
@@ -69,6 +71,20 @@ def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
     shifted = x - torch.max(x, dim=dim, keepdim=True).values
     exp = torch.exp(shifted)
     return exp / torch.sum(exp, dim=dim, keepdim=True)
+
+
+def scaled_dot_product_attention(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    d_k = q.shape[-1]
+    scores = q @ k.transpose(-2, -1) / math.sqrt(d_k)
+    if mask is not None:
+        scores = scores.masked_fill(~mask, float("-inf"))
+    attention_weights = softmax(scores, dim=-1)
+    return attention_weights @ v
 
 
 class SwiGLU(nn.Module):
