@@ -188,3 +188,91 @@ class CausalMultiHeadSelfAttention(nn.Module):
     ) -> torch.Tensor:
         x = x.reshape(*batch_dims, sequence_length, self.num_heads, self.d_head)
         return x.movedim(-2, -3)
+
+
+class TransformerBlock(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        max_seq_len: int,
+        theta: float,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> None:
+        super().__init__()
+        rope = RotaryPositionalEmbedding(
+            theta=theta,
+            d_k=d_model // num_heads,
+            max_seq_len=max_seq_len,
+            device=device,
+        )
+        self.attn = CausalMultiHeadSelfAttention(
+            d_model=d_model,
+            num_heads=num_heads,
+            rope=rope,
+            device=device,
+            dtype=dtype,
+        )
+        self.ln1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+        self.ln2 = RMSNorm(d_model, device=device, dtype=dtype)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        token_positions: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        x = x + self.attn(self.ln1(x), token_positions)
+        return x + self.ffn(self.ln2(x))
+
+
+class TransformerLM(nn.Module):
+    def __init__(
+        self,
+        vocab_size: int,
+        context_length: int,
+        d_model: int,
+        num_layers: int,
+        num_heads: int,
+        d_ff: int,
+        rope_theta: float,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> None:
+        super().__init__()
+        self.context_length = context_length
+        self.token_embeddings = Embedding(
+            num_embeddings=vocab_size,
+            embedding_dim=d_model,
+            device=device,
+            dtype=dtype,
+        )
+        self.layers = nn.ModuleList(
+            [
+                TransformerBlock(
+                    d_model=d_model,
+                    num_heads=num_heads,
+                    d_ff=d_ff,
+                    max_seq_len=context_length,
+                    theta=rope_theta,
+                    device=device,
+                    dtype=dtype,
+                )
+                for _ in range(num_layers)
+            ]
+        )
+        self.ln_final = RMSNorm(d_model, device=device, dtype=dtype)
+        self.lm_head = Linear(d_model, vocab_size, device=device, dtype=dtype)
+
+    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        *_, sequence_length = token_ids.shape
+        if sequence_length > self.context_length:
+            raise ValueError("Cannot run TransformerLM on a sequence longer than context_length")
+
+        token_positions = torch.arange(sequence_length, device=token_ids.device)
+        x = self.token_embeddings(token_ids)
+        for layer in self.layers:
+            x = layer(x, token_positions)
+        return self.lm_head(self.ln_final(x))
