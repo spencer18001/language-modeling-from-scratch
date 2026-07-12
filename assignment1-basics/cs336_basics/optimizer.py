@@ -23,6 +23,23 @@ def get_lr_cosine_schedule(
     return min_learning_rate
 
 
+@torch.no_grad()
+def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float, eps: float = 1e-6) -> None:
+    parameters = tuple(parameters)
+    grads = [p.grad for p in parameters if p.grad is not None]
+    if not grads:
+        return
+
+    total_norm = torch.linalg.vector_norm(
+        torch.stack([torch.linalg.vector_norm(grad.detach(), ord=2) for grad in grads]),
+        ord=2,
+    )
+    clip_coef = max_l2_norm / (total_norm + eps)
+    clip_coef = torch.clamp(clip_coef, max=1.0)
+    for grad in grads:
+        grad.mul_(clip_coef.to(device=grad.device))
+
+
 class AdamW(torch.optim.Optimizer):
     def __init__(
         self,
