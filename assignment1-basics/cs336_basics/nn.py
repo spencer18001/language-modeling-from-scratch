@@ -73,6 +73,13 @@ def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
     return exp / torch.sum(exp, dim=dim, keepdim=True)
 
 
+def cross_entropy(inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    shifted = inputs - torch.max(inputs, dim=-1, keepdim=True).values
+    logsumexp = torch.log(torch.sum(torch.exp(shifted), dim=-1))
+    target_logits = torch.gather(shifted, dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
+    return torch.mean(logsumexp - target_logits)
+
+
 def scaled_dot_product_attention(
     q: torch.Tensor,
     k: torch.Tensor,
