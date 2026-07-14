@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from cs336_basics.checkpointing import load_checkpoint, save_checkpoint
 from cs336_basics.data import get_batch
+from cs336_basics.experiment import ExperimentLogger
 from cs336_basics.nn import TransformerLM, cross_entropy
 from cs336_basics.optimizer import AdamW, get_lr_cosine_schedule, gradient_clipping
 
@@ -56,6 +57,8 @@ def main() -> None:
     parser.add_argument("--data-dtype", type=str, default="uint16")
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/runs/debug"))
     parser.add_argument("--resume", type=Path, default=None)
+    parser.add_argument("--run-name", type=str, default=None)
+    parser.add_argument("--experiment-notes", type=str, default="")
 
     parser.add_argument("--vocab-size", type=int, required=True)
     parser.add_argument("--context-length", type=int, default=256)
@@ -94,9 +97,9 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = args.output_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    log_path = args.output_dir / "metrics.jsonl"
-    config_path = args.output_dir / "config.json"
-    config_path.write_text(json.dumps(vars(args), indent=2, default=str), encoding="utf-8")
+    logger = ExperimentLogger(args.output_dir, args.run_name)
+    logger.write_config(vars(args))
+    logger.start_run(vars(args), command=" ".join(sys.argv), notes=args.experiment_notes)
 
     train_data = _load_tokens(args.train_data, args.data_dtype)
     valid_data = _load_tokens(args.valid_data, args.data_dtype) if args.valid_data is not None else None
@@ -125,6 +128,7 @@ def main() -> None:
     start_iter = 0
     if args.resume is not None:
         start_iter = load_checkpoint(args.resume, model, optimizer)
+        logger.log_event("resume", {"checkpoint": args.resume, "start_iter": start_iter})
 
     model.train()
     start_time = time.perf_counter()
@@ -171,15 +175,16 @@ def main() -> None:
                 "tokens_processed": completed_iter * args.batch_size * args.context_length,
             }
             print(json.dumps(metrics), flush=True)
-            with log_path.open("a", encoding="utf-8") as log_file:
-                log_file.write(json.dumps(metrics) + "\n")
+            logger.log_metrics(metrics)
 
         should_checkpoint = (
             completed_iter == args.max_iters
             or (args.checkpoint_interval > 0 and completed_iter % args.checkpoint_interval == 0)
         )
         if should_checkpoint:
-            save_checkpoint(model, optimizer, completed_iter, checkpoint_dir / f"iter_{completed_iter:06d}.pt")
+            checkpoint_path = checkpoint_dir / f"iter_{completed_iter:06d}.pt"
+            save_checkpoint(model, optimizer, completed_iter, checkpoint_path)
+            logger.log_event("checkpoint", {"iteration": completed_iter, "path": checkpoint_path})
 
 
 if __name__ == "__main__":
